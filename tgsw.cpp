@@ -15,153 +15,257 @@ https://eprint.iacr.org/2020/086.pdf
 */
 
 #include <iostream>
-#include <vector>
 #include <random>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <chrono>
 #include <iomanip>
+#include <cstdlib>
 
 using namespace std;
 
-void print_matrix(vector<vector<int32_t>>& matrix) {
-    for (size_t i = 0; i < matrix.size(); i++) {
-        int32_t* row = matrix[i].data();
-        for (size_t j = 0; j < matrix[0].size(); j++) {
-            cout << row[j] << " ";
+// print matrix
+void print_matrix(int32_t** matrix, size_t rows, size_t cols) {
+    for (size_t i = 0; i < rows; i++) {
+        for (size_t j = 0; j < cols; j++) {
+            cout << matrix[i][j] << " ";
         }
         cout << endl;
     }
 }
 
-vector<int32_t> G_inverse_of_scalar(int32_t num, int32_t bit_length, int32_t Bksbit) {
-    const int32_t base = 1 << Bksbit;
-    const int32_t prec_offset = 1 << (32 - (1 + Bksbit * bit_length));
+// create a matrix G^-1(scalar)
+int32_t* G_inverse_of_scalar(int32_t num, int32_t bit_length, int32_t base_bit) {
+    const int32_t base = 1 << base_bit;
+    // const int32_t prec_offset = 1 << (32 - (1 + base_bit * bit_length)); // precision
     const int32_t mask = base - 1;
 
-    num += prec_offset;
-    vector<int32_t> num_bitdecomposed(bit_length);
-    int32_t* ptr = num_bitdecomposed.data();
+    // num += prec_offset;
 
+    int32_t* num_bitdecomposed = (int32_t*)malloc(bit_length * sizeof(int32_t));
     for (size_t i = 0; i < bit_length; i++) {
-        ptr[i] = (num >> (32 - (i + 1) * Bksbit)) & mask;
+        num_bitdecomposed[i] = (num >> (32 - (i + 1) * base_bit)) & mask;
     }
 
     return num_bitdecomposed;
 }
 
-vector<int32_t> G_inverse_of_vector(vector<int32_t>& ciphertext, int32_t bit_length, int32_t Bksbit) {
-    vector<int32_t> bitdecomposed_ciphertext, num_bitdecomposed(bit_length);
 
-    int32_t* cipher_ptr = ciphertext.data();
-    size_t cipher_size = ciphertext.size();
+// create a matrix G^-1(vector)
+int32_t* G_inverse_of_vector(int32_t* ciphertext, size_t n, int32_t bit_length, int32_t base_bit) {
+    size_t result_size = (n + 1) * bit_length;
+    int32_t* bitdecomposed_ciphertext = (int32_t*)malloc(result_size * sizeof(int32_t));
+    size_t index = 0;
 
-    for (size_t j = 0; j < cipher_size; j++) {
-        num_bitdecomposed = G_inverse_of_scalar(cipher_ptr[j], bit_length, Bksbit);
-        bitdecomposed_ciphertext.insert(bitdecomposed_ciphertext.end(), num_bitdecomposed.begin(), num_bitdecomposed.end());
+    for (size_t j = 0; j < n + 1; j++) {
+        int32_t* num_bitdecomposed = G_inverse_of_scalar(ciphertext[j], bit_length, base_bit);
+        for (size_t k = 0; k < bit_length; k++) {
+            bitdecomposed_ciphertext[index++] = num_bitdecomposed[k];
+        }
+        free(num_bitdecomposed);
     }
 
     return bitdecomposed_ciphertext;
 }
 
-vector<int32_t> G_Ginv_multiplication(vector<vector<int32_t>>& G, vector<int32_t>& G_inv, int32_t bit_length) {
-    vector<int32_t> result(G[0].size(), 0);
-    int32_t* result_ptr = result.data();
 
-    size_t j = 0;
-    for (size_t i = 0; i < G.size(); i++) {
-        result_ptr[j] += G[i][j] * G_inv[i];
+// G * G^-1 
+int32_t* G_Ginv_multiplication(int32_t** G, int32_t* G_inv, size_t n, int32_t bit_length) {
+    size_t cols = n + 1;
+    int32_t* result = (int32_t*)calloc(cols, sizeof(int32_t));
+
+    size_t j = 0, rows = (n + 1) * bit_length;
+    for (size_t i = 0; i < rows; i++) {
+        result[j] += G[i][j] * G_inv[i];
         if ((i != 0) && (i % bit_length == 0)) j++;
     }
 
     return result;
 }
 
-int32_t vector_multiplication(vector<int32_t>& v1, vector<int32_t>& v2) {
-    if (v1.size() != v2.size()) {
-        cout << "The lengths of vectors are different!" << endl;
-    }
 
-    int32_t result = 0;
-    int32_t* v1_ptr = v1.data();
-    int32_t* v2_ptr = v2.data();
+// ベクトルの内積 (ポインタ版)
+int32_t vector_multiplication(int32_t* v1, int32_t* v2, size_t n) {
+    int32_t result = 0, size = n;
 
-    for (size_t i = 0; i < v1.size(); i++) {
-        result += v1_ptr[i] * v2_ptr[i];
+    for (size_t i = 0; i < size; i++) {
+        result += v1[i] * v2[i];
     }
 
     return result;
 }
 
-vector<int32_t> matrix_vector_multiplication(vector<vector<int32_t>>& mat, vector<int32_t>& vec) {
-    vector<int32_t> result(mat.size(), 0);
-    int32_t* res_ptr = result.data();
-    int32_t* vec_ptr = vec.data();
+// matrix vector multiplication
+int32_t* matrix_vector_multiplication(int32_t** mat, int32_t* vec, size_t rows, size_t cols) {
+    int32_t* result = (int32_t*)calloc(rows, sizeof(int32_t));
+    for (size_t i = 0; i < rows; i++) {
+        for (size_t j = 0; j < cols; j++) {
+            result[i] += mat[i][j] * vec[j];
+        }
+    }
+    return result;
+}
 
-    for (size_t i = 0; i < mat.size(); i++) {
-        int32_t* mat_ptr = mat[i].data();
-        for (size_t j = 0; j < mat[0].size(); j++) {
-            res_ptr[i] += mat_ptr[j] * vec_ptr[j];
+
+// vector matrix multiplication
+int32_t* vector_matrix_multiplication(int32_t* vec, int32_t** mat, size_t vec_size, size_t mat_cols) {
+    int32_t* result = (int32_t*)calloc(mat_cols, sizeof(int32_t));
+
+    for (size_t i = 0; i < mat_cols; i++) {
+        for (size_t j = 0; j < vec_size; j++) {
+            result[i] += vec[j] * mat[j][i];
         }
     }
 
     return result;
 }
 
-vector<vector<int32_t>> create_G(int32_t n, int32_t bit_length, int32_t Bksbit) {
-    vector<vector<int32_t>> G((n + 1) * bit_length, vector<int32_t>(n + 1, 0));
 
-    for (size_t i = 0; i < n + 1; i++) {
+// create matrix G
+int32_t** create_G(int32_t n, int32_t bit_length, int32_t base_bit) {
+    size_t rows = (n + 1) * bit_length;
+    size_t cols = n + 1;
+    int32_t** G = (int32_t**)malloc(rows * sizeof(int32_t*));
+    for (size_t i = 0; i < rows; i++) {
+        G[i] = (int32_t*)calloc(cols, sizeof(int32_t));
+    }
+
+    for (size_t i = 0; i < cols; i++) {
         for (size_t j = 0; j < bit_length; j++) {
-            G[i * bit_length + j][i] = 1 << (32 - (j + 1) * Bksbit);
+            G[i * bit_length + j][i] = 1 << (32 - (j + 1) * base_bit);
         }
     }
 
     return G;
 }
 
+
+// GSW encryption
+int32_t** GSW_encrypt(int message, int32_t** A, int32_t n, int32_t bit_length, int32_t Bksbit) {
+    int32_t m = int32_t(message);
+
+    if (m == 0) return A;
+
+    int32_t** G = create_G(n, bit_length, Bksbit);
+
+    size_t rows = (n + 1) * bit_length;
+    size_t cols = n + 1;
+    int32_t** ciphertext = (int32_t**)malloc(rows * sizeof(int32_t*));
+    for (size_t i = 0; i < rows; i++) {
+        ciphertext[i] = (int32_t*)calloc(cols, sizeof(int32_t));
+        for (size_t j = 0; j < cols; j++) {
+            ciphertext[i][j] = A[i][j] + G[i][j];
+        }
+        free(G[i]);
+    }
+
+    free(G);
+
+    return ciphertext;
+}
+
+
+// implement the external product
+int32_t* external_product(int32_t** C, size_t C_rows, size_t C_cols, int32_t* lwe, int32_t bit_length, int32_t base_bit) {
+
+    int32_t* G_inv_lwe = G_inverse_of_vector(lwe, C_cols, bit_length, base_bit);
+    int32_t* external_product_result = vector_matrix_multiplication(G_inv_lwe, C, C_rows, C_cols);
+
+    free(G_inv_lwe);
+    return external_product_result;
+}
+
+
+// GSW implementation
 void myGSW() {
-    int32_t bit_length = 31;
-    int32_t Bksbit = 1;
-    int32_t n = 560;
+    int32_t bit_length = 32;
+    int32_t base_bit = 1;
+    int32_t n = 5;
     cout << "Please wait......., some computations might take some time..." << endl;
 
     random_device rd;
     mt19937 gen(rd());
     uniform_int_distribution<int32_t> bit_dist(0, 1);
     uniform_int_distribution<int32_t> int32_t_dist(numeric_limits<int32_t>::min(), numeric_limits<int32_t>::max());
+    // uniform_int_distribution<int32_t> int32_t_dist(0, 5);
 
-    vector<int32_t> sk(n + 1);
+    int32_t* sk = (int32_t*)malloc((n + 1) * sizeof(int32_t));
     sk[0] = 1;
-    int32_t* sk_ptr = sk.data();
-    for (size_t i = 1; i < n + 1; i++) sk_ptr[i] = bit_dist(gen);
+    for (size_t i = 1; i < n + 1; i++) sk[i] = bit_dist(gen);
 
-    vector<vector<int32_t>> A((n + 1) * bit_length, vector<int32_t>(n + 1, 0));
-    for (int i = 0; i < A.size(); i++) {
-        int32_t* row = A[i].data();
-        for (int j = 1; j < A[0].size(); j++) {
-            row[j] = int32_t_dist(gen);
+    // create an error vector
+    int32_t* error_vec = (int32_t*)malloc((n + 1) * bit_length * sizeof(int32_t));
+    for (size_t i = 0; i < (n + 1) * bit_length; i++) error_vec[i] = bit_dist(gen);
+
+    // create a matrix A
+    size_t rows = (n + 1) * bit_length;
+    int32_t** A = (int32_t**)malloc(rows * sizeof(int32_t*));
+    for (size_t i = 0; i < rows; i++) {
+        A[i] = (int32_t*)calloc(n + 1, sizeof(int32_t));
+        for (size_t j = 1; j < n + 1; j++) {
+            A[i][j] = int32_t_dist(gen);
         }
     }
 
-    vector<int32_t> lwe(n + 1, 0);
-    int32_t* lwe_ptr = lwe.data();
-    for (int i = 1; i < n + 1; i++) {
-        lwe_ptr[i] = int32_t_dist(gen);
-        lwe_ptr[0] += sk_ptr[i] * lwe_ptr[i];
+    // creating the public key, i.e., matrix A = (s*A + e, A):
+    for (size_t i = 0; i < rows; i++) {
+        for (size_t k = 1; k < n + 1; k++) {
+            A[i][0] += sk[k] * A[i][k];
+        }
+        A[i][0] += error_vec[i];
     }
 
-    lwe_ptr[0] += 8;
 
-    vector<int32_t> G_inv = G_inverse_of_vector(lwe, bit_length, Bksbit);
+    int32_t* lwe = (int32_t*)calloc(n + 1, sizeof(int32_t));
+    for (size_t i = 1; i < n + 1; i++) {
+        lwe[i] = int32_t_dist(gen);
+        lwe[0] += sk[i] * lwe[i];
+    }
+    lwe[0] += 8;
 
-    cout << "GSW Implementation completed." << endl;
+    for (size_t i = 1; i < n + 1; i++) sk[i] = -sk[i];
+    cout << vector_multiplication(lwe, sk, n + 1) << endl;
+
+    int32_t* G_inv_lwe = G_inverse_of_vector(lwe, n + 1, bit_length, base_bit);
+    int32_t** C = GSW_encrypt(1, A, n, bit_length, base_bit);
+    int32_t* result = vector_matrix_multiplication(G_inv_lwe, C, rows, n + 1);
+    cout << vector_multiplication(error_vec, G_inv_lwe, (n + 1) * bit_length) << endl;
+    cout << vector_multiplication(result, sk , n + 1) << endl;
+
+    int32_t* c = external_product(C, rows, n + 1, lwe, bit_length, base_bit);
+    cout << vector_multiplication(c, sk , n + 1) << endl;
+
+
+    // int32_t q[3] = {123123123, 11115555, 18181818};
+    // int32_t* ginv = G_inverse_of_vector(q, 2, bit_length, base_bit);
+
+    // int32_t** g = create_G(2, bit_length, base_bit);
+    // int32_t* d = vector_matrix_multiplication(ginv, g, 3*bit_length, 3);
+
+    // cout << endl;
+    // for (size_t i = 0; i < 3; i++) {
+    //     cout << d[i] << " ";
+    // }
+    // cout << endl;
+
+    free(sk);
+    free(lwe);
+    // free(G_inv);
+    // free(result);
+    free(error_vec);
+    for (size_t i = 0; i < rows; i++) {
+        free(A[i]);
+        // free(G[i]);
+    }
+    free(A);
+    // free(G);
 }
 
 
+
 int main() {
-    
+        
     cout << "################################################################" << endl;
     cout << "#-------------  GSW Implementation ! -------------#" << endl;
     cout << "################################################################" << endl;
