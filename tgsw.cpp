@@ -137,8 +137,8 @@ void GSW_encrypt(int32_t** C, int message, int32_t n, int32_t bit_length, int32_
     random_device rd;
     mt19937 gen(rd());
     uniform_int_distribution<int32_t> bit_dist(0, 1);
-    // uniform_int_distribution<int32_t> int32_t_dist(numeric_limits<int32_t>::min(), numeric_limits<int32_t>::max());
-    uniform_int_distribution<int32_t> int32_t_dist(0, 5);
+    uniform_int_distribution<int32_t> int32_t_dist(numeric_limits<int32_t>::min(), numeric_limits<int32_t>::max());
+    // uniform_int_distribution<int32_t> int32_t_dist(0, 5);
 
     size_t rows = (n + 1) * bit_length;
     size_t cols = n + 1;
@@ -151,15 +151,13 @@ void GSW_encrypt(int32_t** C, int message, int32_t n, int32_t bit_length, int32_
         }
     }
 
-    // creating the public key, i.e., matrix A = (s*A + e, A):
+    // creating the key, i.e., matrix A = (s*A + e, A):
     for (size_t i = 0; i < rows; i++) {
         for (size_t k = 1; k < n + 1; k++) {
             C[i][0] += sk[k] * C[i][k];
         }
         C[i][0] += error_vec[i];
     }
-
-
 
     int32_t m = int32_t(message);
     if (m == 0) return;
