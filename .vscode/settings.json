@@ -12,6 +12,7 @@
         "string": "cpp",
         "iterator": "cpp",
         "initializer_list": "cpp",
-        "unordered_map": "cpp"
+        "unordered_map": "cpp",
+        "cmath": "cpp"
     }
 }

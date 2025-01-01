@@ -16,11 +16,8 @@ https://eprint.iacr.org/2020/086.pdf
 
 #include <iostream>
 #include <random>
-#include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <chrono>
-#include <iomanip>
 #include <cstdlib>
 
 using namespace std;
