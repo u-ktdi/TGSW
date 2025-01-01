@@ -142,27 +142,48 @@ int32_t** create_G(int32_t n, int32_t bit_length, int32_t base_bit) {
 
 
 // GSW encryption
-int32_t** GSW_encrypt(int message, int32_t** A, int32_t n, int32_t bit_length, int32_t Bksbit) {
-    int32_t m = int32_t(message);
-
-    if (m == 0) return A;
-
-    int32_t** G = create_G(n, bit_length, Bksbit);
+void GSW_encrypt(int32_t** C, int message, int32_t n, int32_t bit_length, int32_t Bksbit, int32_t* sk, int32_t* error_vec) {
+    random_device rd;
+    mt19937 gen(rd());
+    uniform_int_distribution<int32_t> bit_dist(0, 1);
+    // uniform_int_distribution<int32_t> int32_t_dist(numeric_limits<int32_t>::min(), numeric_limits<int32_t>::max());
+    uniform_int_distribution<int32_t> int32_t_dist(0, 5);
 
     size_t rows = (n + 1) * bit_length;
     size_t cols = n + 1;
-    int32_t** ciphertext = (int32_t**)malloc(rows * sizeof(int32_t*));
+
+    // create a matrix A
     for (size_t i = 0; i < rows; i++) {
-        ciphertext[i] = (int32_t*)calloc(cols, sizeof(int32_t));
+        error_vec[i] = bit_dist(gen);
+        for (size_t j = 1; j < n + 1; j++) {
+            C[i][j] = int32_t_dist(gen);
+        }
+    }
+
+    // creating the public key, i.e., matrix A = (s*A + e, A):
+    for (size_t i = 0; i < rows; i++) {
+        for (size_t k = 1; k < n + 1; k++) {
+            C[i][0] += sk[k] * C[i][k];
+        }
+        C[i][0] += error_vec[i];
+    }
+
+
+
+    int32_t m = int32_t(message);
+    if (m == 0) return;
+
+    int32_t** G = create_G(n, bit_length, Bksbit);
+    for (size_t i = 0; i < rows; i++) {
         for (size_t j = 0; j < cols; j++) {
-            ciphertext[i][j] = A[i][j] + G[i][j];
+            C[i][j] += G[i][j];
         }
         free(G[i]);
     }
 
     free(G);
 
-    return ciphertext;
+    return;
 }
 
 
@@ -181,7 +202,7 @@ int32_t* external_product(int32_t** C, size_t C_rows, size_t C_cols, int32_t* lw
 void myGSW() {
     int32_t bit_length = 32;
     int32_t base_bit = 1;
-    int32_t n = 5;
+    int32_t n = 560;
     cout << "Please wait......., some computations might take some time..." << endl;
 
     random_device rd;
@@ -196,24 +217,12 @@ void myGSW() {
 
     // create an error vector
     int32_t* error_vec = (int32_t*)malloc((n + 1) * bit_length * sizeof(int32_t));
-    for (size_t i = 0; i < (n + 1) * bit_length; i++) error_vec[i] = bit_dist(gen);
 
-    // create a matrix A
+    // // create a matrix A
     size_t rows = (n + 1) * bit_length;
-    int32_t** A = (int32_t**)malloc(rows * sizeof(int32_t*));
+    int32_t** C = (int32_t**)malloc(rows * sizeof(int32_t*));
     for (size_t i = 0; i < rows; i++) {
-        A[i] = (int32_t*)calloc(n + 1, sizeof(int32_t));
-        for (size_t j = 1; j < n + 1; j++) {
-            A[i][j] = int32_t_dist(gen);
-        }
-    }
-
-    // creating the public key, i.e., matrix A = (s*A + e, A):
-    for (size_t i = 0; i < rows; i++) {
-        for (size_t k = 1; k < n + 1; k++) {
-            A[i][0] += sk[k] * A[i][k];
-        }
-        A[i][0] += error_vec[i];
+        C[i] = (int32_t*)calloc(n + 1, sizeof(int32_t));
     }
 
 
@@ -224,17 +233,20 @@ void myGSW() {
     }
     lwe[0] += 8;
 
-    for (size_t i = 1; i < n + 1; i++) sk[i] = -sk[i];
-    cout << vector_multiplication(lwe, sk, n + 1) << endl;
+
 
     int32_t* G_inv_lwe = G_inverse_of_vector(lwe, n + 1, bit_length, base_bit);
-    int32_t** C = GSW_encrypt(1, A, n, bit_length, base_bit);
+    GSW_encrypt(C, 1, n, bit_length, base_bit, sk, error_vec);
     int32_t* result = vector_matrix_multiplication(G_inv_lwe, C, rows, n + 1);
+
+
+    for (size_t i = 1; i < n + 1; i++) sk[i] = -sk[i];
+    cout << vector_multiplication(lwe, sk, n + 1) << endl;    
     cout << vector_multiplication(error_vec, G_inv_lwe, (n + 1) * bit_length) << endl;
     cout << vector_multiplication(result, sk , n + 1) << endl;
 
     int32_t* c = external_product(C, rows, n + 1, lwe, bit_length, base_bit);
-    cout << vector_multiplication(c, sk , n + 1) << endl;
+    cout << vector_multiplication(c, sk, n + 1) << endl;
 
 
     // int32_t q[3] = {123123123, 11115555, 18181818};
@@ -251,15 +263,15 @@ void myGSW() {
 
     free(sk);
     free(lwe);
-    // free(G_inv);
-    // free(result);
     free(error_vec);
     for (size_t i = 0; i < rows; i++) {
-        free(A[i]);
-        // free(G[i]);
+        free(C[i]);
     }
-    free(A);
-    // free(G);
+    free(C);
+    free(G_inv_lwe);
+    free(result);
+    // free(d);
+    // free(c);
 }
 
 
