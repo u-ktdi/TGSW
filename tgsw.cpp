@@ -258,7 +258,6 @@ Torus32 lwePhase(const Torus32* sample, const int32_t* sk, int32_t n) {
     for (int j = 1; j < n + 1; ++j) {
         axs += sample[j]*sk[j];
     } 
-
     return sample[0] - axs;
 }
 
@@ -270,7 +269,6 @@ int32_t LWE_Decrypt(const Torus32 *sample, const int32_t* sk, int32_t n) {
 }
 
 Torus32* AND_GSW(Torus32* c1, Torus32* c2, int32_t n, int32_t bit_length, int32_t base_bit) {
-
 
     Torus32* c = (Torus32*)calloc(n + 1, sizeof(Torus32));
     for (int32_t i = 0; i < n + 1; i++) {
