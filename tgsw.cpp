@@ -1,454 +1,357 @@
 /*
-This is an implementation of the GSW scheme using the NTL and GMP C++ libraries.
-
-Sources:
-NTL C++ library: https://libntl.org/
-GMP C++ library: https://gmplib.org/
+This is an implementation of the GSW scheme (security bit : At least 110 bit)
 
 Articles and references:
 GSW scheme: https://eprint.iacr.org/2013/340.pdf
-
-other related articles:
-https://web.eecs.umich.edu/~cpeikert/pubs/polyboot.pdf
-https://eprint.iacr.org/2021/691.pdf
-https://eprint.iacr.org/2020/086.pdf
 */
 
 #include <iostream>
-#include <vector>
 #include <random>
-#include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <chrono>
-#include <iomanip>
-
+#include <cstdlib>
 
 using namespace std;
+using Torus32 = int32_t;
+
+const double stdev = 3.05e-5;
+
+// random number generator
+random_device rd;
+mt19937 gen(rd());
+uniform_int_distribution<int32_t> bit_dist(0, 1);
+uniform_int_distribution<int32_t> int32_t_dist(numeric_limits<int32_t>::min(), numeric_limits<int32_t>::max());
+normal_distribution<double> error_distribution(0., stdev);
 
 
-//////////////////////////////////////////////////////////////////////////////
-// forward declaration:
-vector<int32_t> G_inverse(int32_t num, long bit_length);
 
-//////////////////////////////////////////////////////////////////////////////
+Torus32 modSwitchToTorus32(int32_t mu, int32_t Msize){
+    uint64_t interv = ((UINT64_C(1)<<63)/Msize)*2; 
+    uint64_t phase64 = mu*interv;
+    return phase64>>32;
+}
 
 
-void print_matrix(vector<vector<int32_t>>& matrix) {
-    for (size_t i = 0; i < matrix.size(); i++) {
-        for (size_t j = 0; j < matrix[0].size(); j++) {
+// from double to Torus32
+Torus32 dtot32(double d) {
+    return int32_t(int64_t((d - int64_t(d))*(INT64_C(1) << 32)));
+}
+
+
+Torus32 gaussian32(int32_t message){
+    Torus32 _1s8 = modSwitchToTorus32(1, 8);
+    Torus32 mu = message ? _1s8 : -_1s8;
+
+    double err = error_distribution(gen);
+    return mu + dtot32(err);
+}
+
+
+// b = <a_i,s_i> + m + e
+// m comes with a scaling factor 
+void LWE_encrypt(Torus32* result, int message, int32_t n, int32_t* sk) {
+    
+    result[0] = gaussian32(message); 
+
+    for (int j = 1; j < n + 1; ++j) {
+        result[j] = int32_t_dist(gen);
+        result[0] += result[j]*sk[j];
+    } 
+    
+    return;
+}
+
+
+// secret key generation
+void sk_gen(int32_t* sk, int32_t n) {
+    for (int32_t i = 1; i < n + 1; i++) {
+        sk[i] = bit_dist(gen);
+    }
+    sk[0] = 1;
+    return;
+}
+
+
+// print matrix
+void print_matrix(Torus32** matrix, int32_t rows, int32_t cols) {
+    for (int32_t i = 0; i < rows; i++) {
+        for (int32_t j = 0; j < cols; j++) {
             cout << matrix[i][j] << " ";
         }
         cout << endl;
     }
 }
 
-// vector<vector<int32_t>> G_inverse_of_matrix(vector<vector<int32_t>> ciphertext, long n, long bit_length) {
-//     // this function  gets a ciphertext as input, which is a matrix of dimension (2 ⨯ 2*bit_length).
-//     // The function returns the bitdecomposition of the ciphertext.
-//     // the output is a matrix of dimension (2*bit_length ⨯ 2*bit_length) with binary entries.
+// create a matrix G^-1(scalar)
+void G_inverse_of_scalar(Torus32* result, int32_t num, int32_t bit_length, int32_t base_bit) {
+    const int32_t base = 1 << base_bit;
+    const int32_t prec_offset = 1 << (32 - (1 + base_bit * bit_length)); // precision
+    const int32_t mask = base - 1;
 
-//     vector<vector<int32_t>> bitdecomposed_ciphertext((n + 1) * bit_length, vector<int32_t>((n + 1) * bit_length, 0));
-//     vector<int32_t> num_bitdecomposed(bit_length);
+    num += prec_offset;
 
-//     int32_t temp_num;
-//     for (size_t i = 0; i < bitdecomposed_ciphertext.size(); i++) {
-//         for (size_t j = 0; j < n + 1; j++) {
-//             temp_num = ciphertext[j][i];
-//             num_bitdecomposed = G_inverse(temp_num, bit_length);
-//             for (size_t k = 0; k < bit_length; k++) {
-//                 bitdecomposed_ciphertext[j * bit_length + k][i] = num_bitdecomposed[k];
-//             }
-//         }
-//     }
-
-//     return bitdecomposed_ciphertext;
-// }
-
-vector<int32_t> G_inverse_of_scalar(int32_t num, long bit_length) {
-    // this function gets an integer number and bit-decomposes the number the way that G^-1 works:
-
-    vector<int32_t> num_bitdecomposed(bit_length);
-    for (size_t i = 0; i < bit_length; i++) {
-        num_bitdecomposed[i] = (num >> i) & 1;
+    for (int32_t i = 0; i < bit_length; i++) {
+        result[i] = (num >> (32 - (i + 1) * base_bit)) & mask;
     }
 
-    return num_bitdecomposed;
+    return;
 }
 
 
-vector<int32_t> G_inverse_of_vector(vector<int32_t>& ciphertext, long bit_length) {
-    // this function  gets a ciphertext as input, which is a matrix of dimension (2 ⨯ 2*bit_length).
-    // The function returns the bitdecomposition of the ciphertext.
-    // the output is a matrix of dimension (2*bit_length ⨯ 2*bit_length) with binary entries.
+// create a matrix G^-1(vector)
+void G_inverse_of_vector(Torus32* result, Torus32* ciphertext, int32_t n, int32_t bit_length, int32_t base_bit) {
+    int32_t index = 0;
 
-    vector<int32_t> bitdecomposed_ciphertext, num_bitdecomposed(bit_length);
-
-    int32_t temp_num;
-    for (size_t j = 0; j < ciphertext.size(); j++) {
-        temp_num = ciphertext[j];
-        num_bitdecomposed = G_inverse_of_scalar(temp_num, bit_length);
-        bitdecomposed_ciphertext.insert(bitdecomposed_ciphertext.end(), num_bitdecomposed.begin(), num_bitdecomposed.end());
+    for (int32_t j = 0; j < n + 1; j++) {
+        Torus32* num_bitdecomposed = (Torus32*)malloc(bit_length * sizeof(Torus32));
+        G_inverse_of_scalar(num_bitdecomposed, ciphertext[j], bit_length, base_bit);
+        for (int32_t k = 0; k < bit_length; k++) {
+            result[index++] = num_bitdecomposed[k];
+        }
+        free(num_bitdecomposed);
     }
 
-    return bitdecomposed_ciphertext;
+    return;
 }
 
-vector<int32_t> G_Ginv_multiplication(vector<vector<int32_t>>& G, vector<int32_t>& G_inv, long bit_length) {
-    vector<int32_t> result(G[0].size(), 0);
-    size_t j = 0;
-    for (size_t i = 0; i < G.size(); i++) {
+
+// G * G^-1 (calloc)
+void G_Ginv_multiplication(Torus32* result, Torus32** G, Torus32* G_inv, int32_t n, int32_t bit_length) {
+    int32_t cols = n + 1;
+
+    int32_t j = 0, rows = (n + 1) * bit_length;
+    for (int32_t i = 0; i < rows; i++) {
         result[j] += G[i][j] * G_inv[i];
         if ((i != 0) && (i % bit_length == 0)) j++;
     }
-    return result;
+
+    return;
 }
 
 
-int32_t vector_multiplication(vector<int32_t>& v1, vector<int32_t>& v2) {
-    // this function gets two vectors and returns the dot product of the two vectors.
-    if (v1.size() != v2.size()) {
-        cout << "The lengths of vectors are different!" << endl;
-        cout << "v1.length(): " << v1.size() << "\tv2.length(): " << v2.size() << endl;
-    }
+// internal product
+int32_t vector_multiplication(Torus32* v1, Torus32* v2, int32_t size) {
+    int32_t result = 0;
 
-    int32_t result = int32_t(0);
-    for (size_t i = 0; i < v1.size(); i++) result += v1[i] * v2[i];
+    for (int32_t i = 0; i < size; i++) {
+        result += v1[i] * v2[i];
+    }
 
     return result;
 }
 
-
-vector<int32_t> matrix_vector_multiplication(vector<vector<int32_t>>& mat, vector<int32_t>& vec) {
-    // this function gets a matrix and a vector and returns the result of the matrix-vector multiplication.
-    vector<int32_t> result(mat.size(), 0);
-    if (mat[0].size() != vec.size()) {
-        cout << "Error in the matrix_vector_multiplication function: the dimensions of the matrix and the vector do not match!" << endl;
-    }
-    for (size_t i = 0; i < mat.size(); i++) {
-        for (size_t j = 0; j < mat[0].size(); j++) {
+// matrix vector multiplication (need to prepare the vector with calloc)
+void matrix_vector_multiplication(Torus32* result, Torus32** mat, Torus32* vec, int32_t rows, int32_t cols) {
+    for (int32_t i = 0; i < rows; i++) {
+        for (int32_t j = 0; j < cols; j++) {
             result[i] += mat[i][j] * vec[j];
         }
     }
-    return result;
+    return;
 }
 
-vector<int32_t> vector_matrix_multiplication(vector<int32_t>& vec, vector<vector<int32_t>>& mat) {
-    vector<int32_t> result(mat[0].size(), 0);
-    for (size_t i = 0; i < mat[0].size(); i++) {
-        for (size_t j = 0; j < vec.size(); j++) {
+
+// vector matrix multiplication
+void vector_matrix_multiplication(Torus32* result, Torus32* vec, Torus32** mat, int32_t mat_rows, int32_t mat_cols) {
+
+    for (int32_t i = 0; i < mat_cols; i++) {
+        for (int32_t j = 0; j < mat_rows; j++) {
             result[i] += vec[j] * mat[j][i];
         }
     }
-    return result;
+
+    return;
 }
 
 
+// create matrix G
+void create_G(Torus32** G, int32_t n, int32_t bit_length, int32_t base_bit) {
+    int32_t rows = (n + 1) * bit_length;
+    int32_t cols = n + 1;
 
-// Creating a gaget matrix G:
-vector<vector<int32_t>> create_G(long n, long bit_length) {
-    vector<vector<int32_t>> G((n + 1) * bit_length, vector<int32_t>(n + 1, 0));
-
-    for (size_t i = 0; i < n + 1; i++) {
-        int32_t temp = int32_t(1);
-        for (size_t j = 0; j < bit_length; j++) {
-            G[i * bit_length + j][i] = temp;
-            temp *= int32_t(2);
+    for (int32_t i = 0; i < cols; i++) {
+        for (int32_t j = 0; j < bit_length; j++) {
+            G[i * bit_length + j][i] = 1 << (32 - (j + 1) * base_bit);
         }
     }
 
-    return G;
+    return;
 }
 
-// Implementation of the encryption algorithm for the GSW scheme
-vector<vector<int32_t>> encrypt(int message, vector<vector<int32_t>>& A, long n, long bit_length) {
-    
+
+// GSW encryption
+void GSW_encrypt(Torus32** C, int message, int32_t n, int32_t bit_length, int32_t Bksbit, int32_t* sk) {
+
+    int32_t rows = (n + 1) * bit_length;
+    int32_t cols = n + 1;
+
+    // create a error vector
+    Torus32* error_vec = (Torus32*)malloc(rows * sizeof(Torus32));
+
+    // create a matrix A
+    for (int32_t i = 0; i < rows; i++) {
+        error_vec[i] = dtot32(error_distribution(gen));
+        for (int32_t j = 1; j < n + 1; j++) {
+            C[i][j] = int32_t_dist(gen);
+        }
+    }
+
+    // creating the key, i.e., matrix A = (s*A + e, A):
+    for (int32_t i = 0; i < rows; i++) {
+        for (int32_t k = 1; k < n + 1; k++) {
+            C[i][0] += sk[k] * C[i][k];
+        }
+        C[i][0] += error_vec[i];
+    }
+
     int32_t m = int32_t(message);
-
-    if (m == 0) return A;
-
-    // // calculating A * R:
-    // vector<vector<int32_t>> A_milttipliedBy_R(n, vector<int32_t>(n * bit_length, 0));
-    // for (int i = 0; i < n; i++) {
-    //     for (int j = 0; j < n * bit_length; j++) {
-    //         for (int k = 0; k < n * bit_length; k++) {
-    //             A_milttipliedBy_R[i][j] += A[i][k] * R[k][j];
-    //         }
-    //     }
-    // }
-
-    // creating matrix G:
-    vector<vector<int32_t>> G = create_G(n, bit_length);
+    if (m == 0) return;
 
 
-    // Encrypting a message (where m can be 0 or 1) using the GSW scheme: ciphertext = A + m*G:
-    vector<vector<int32_t>> ciphertext((n + 1) * bit_length, vector<int32_t>(n + 1, 0));
-    for (size_t i = 0; i < (n + 1) * bit_length; i++) {
-        for (size_t j = 0; j < n + 1; j++) {
-            ciphertext[i][j] = A[i][j] + G[i][j];
+    // create the matrix G
+    int32_t** G = (int32_t**)malloc(rows * sizeof(int32_t*));
+    for (int32_t i = 0; i < rows; i++) {
+        G[i] = (int32_t*)calloc(cols, sizeof(int32_t));
+    }
+
+    // C += G
+    create_G(G, n, bit_length, Bksbit);
+    for (int32_t i = 0; i < rows; i++) {
+        for (int32_t j = 0; j < cols; j++) {
+            C[i][j] += G[i][j];
         }
+        free(G[i]);
     }
 
-    return ciphertext;
-}
+    free(G);
+    free(error_vec);
 
-// Implementation of the decryption algorithm for the RGSW scheme
-// int decrypt(vector<int32_t> sk, vector<vector<int32_t>> ciphertext, long n, long bit_length, int32_t modulous) {
-//     int decrypted_message;
-
-//     decrypted_message = 0; // initializing the variabele.
-//     vector<int32_t> penultimate_column_of_c, last_column_of_c;
-//     vector<int32_t> first_column_of_c, second_column_of_c;
-
-//     for (size_t i = 0; i < n; i++) {
-//         first_column_of_c.push_back(ciphertext[i][0]);
-//         second_column_of_c.push_back(ciphertext[i][1]);
-
-//         penultimate_column_of_c.push_back(ciphertext[i][2 * bit_length - 2]);
-//         last_column_of_c.push_back(ciphertext[i][2 * bit_length - 1]);
-//     }
-
-//     int32_t result1, result2, result3, result4;
-//     int32_t result3int32_t;
-//     long comparison_result;
-
-//     result1 = dot_product(sk, first_column_of_c);
-//     result2 = dot_product(sk, second_column_of_c);
-//     result3 = dot_product(sk, penultimate_column_of_c);
-//     result4 = dot_product(sk, last_column_of_c);
-
-//     int32_t p_dividedBy_2;;
-//     div(p_dividedBy_2, modulous, int32_t(2));
-//     conv(result3int32_t, result3);
-//     comparison_result = compare(result3int32_t, p_dividedBy_2);
-
-//     if (comparison_result > 0)
-//         decrypted_message = 1;
-//     else
-//         decrypted_message = 0;
-
-//     return decrypted_message;
-// }
-
-
-// Implementation of the addition gate for the GSW scheme
-vector<vector<int32_t>> add(vector<vector<int32_t>>& c1, vector<vector<int32_t>>& c2) {
-    vector<vector<int32_t>> addtion_result(c1.size(), vector<int32_t>(c1[0].size()));
-
-    if ((c1.size() != c2.size()) || (c1[0].size() != c2[0].size())) {
-        cout << "Error in the add function: the dimensions of the ciphertext do not matach!" << endl;
-    }
-
-    for (size_t i = 0; i < c1.size(); i++) {
-        for (size_t j = 0; j < c1[0].size(); j++) {
-            addtion_result[i][j] = c1[i][j] + c2[i][j];
-        }
-    }
-
-    return addtion_result;
+    return;
 }
 
 
-// Implementation of the external product gate for the GSW scheme
-vector<int32_t> external_product(vector<vector<int32_t>>& C, vector<int32_t>& lwe) {
-    vector<int32_t> external_product_result(C[0].size());
-
-    if (C.size() != lwe.size()) {
-        cout << "Error in the external_product function: the dimensions of the ciphertext do not matach!" << endl;
-    }
-
-    for (size_t i = 0; i < C.size(); i++) {
-        external_product_result[i] = int32_t(0);
-        for (size_t j = 0; j < C[0].size(); j++) {
-            external_product_result[i] += C[i][j] * lwe[j];
+// Add computation by tgsw (add two matrices)
+void add(Torus32** C1, Torus32** C2, int32_t rows, int32_t cols) {
+    for (int32_t i = 0; i < rows; i++) {
+        for (int32_t j = 0; j < cols; j++) {
+            C1[i][j] += C2[i][j];
         }
     }
-
-    return external_product_result;
+    return;
 }
 
 
-//////////////////////////////////////////////////////////////////////////////
-// Implementation of the multiplication gate for the GSW scheme
-// vector<vector<int32_t>> multiply(vector<vector<int32_t>> c1, vector<vector<int32_t>> c2, long n, long bit_length) {
+// implement the external product
+void external_product(Torus32* result, Torus32** C, int32_t C_rows, int32_t C_cols, Torus32* lwe, int32_t bit_length, int32_t base_bit) {
+    Torus32* G_inv_lwe = (Torus32*)malloc(C_rows * sizeof(Torus32));
+    G_inverse_of_vector(G_inv_lwe, lwe, C_cols - 1, bit_length, base_bit);
+    vector_matrix_multiplication(result, G_inv_lwe, C, C_rows, C_cols);
 
-//     if ((c1.size() != c2.size()) || (c1[0].size() != c2[0].size())) {
-//         cout << "Error in the multiply function: the dimensions of the ciphertext do not matach!" << endl;
-//     }
-
-//     vector<vector<int32_t>> multiplication_result(c1.size(), vector<int32_t>(c2[0].size()));
-
-//     // calculating G_inverse (c2):
-//     vector<vector<int32_t>> G_inverseOf_c2 = G_inverse_of_ciphertext(c2, n, bit_length);
-
-//     // initializing all elements of multiplication_result to zero.
-//     for (size_t i = 0; i < c1.size(); i++) {
-//         for (size_t j = 0; j < c2[0].size(); j++) {
-//             multiplication_result[i][j] = int32_t(0);
-//         }
-//     }
-
-//     // calculating c1 . G_inverse(c2):
-//     int32_t temp;
-//     for (size_t i = 0; i < c1.size(); i++) {
-//         for (size_t j = 0; j < c1[0].size(); j++) {
-//             for (size_t k = 0; k < G_inverseOf_c2.size(); k++) {
-//                 //cout << "i: " << i << ", j: " << j << ", k: " << k << endl;
-//                 temp = c1[i][k] * G_inverseOf_c2[k][j];
-//                 multiplication_result[i][j] += temp;
-//             }
-//         }
-//     }
-
-//     return multiplication_result;
-// }
+    free(G_inv_lwe);
+    return;
+}
 
 
-void myGSW() {
-    long bit_length = 16;
-    long n = 560; 
-    cout << "Please wait......., some computations might take some time...";
+Torus32 lwePhase(const Torus32* sample, const int32_t* sk, int32_t n) {
+    Torus32 axs = 0;
 
-    random_device rd;
-    mt19937 gen(rd());
-    uniform_int_distribution<int32_t> bit_dist(0, 1);
-    // uniform_int_distribution<int32_t> int32_t_dist(numeric_limits<int32_t>::min(), numeric_limits<int32_t>::max());
-    uniform_int_distribution<int32_t> int32_t_dist(0, 30);
+    for (int j = 1; j < n + 1; ++j) {
+        axs += sample[j]*sk[j];
+    } 
 
-    // generating the secret key:
-    vector<int32_t> sk(n+1);
-    sk[0] = int32_t(1);
-    for (size_t i = 1; i < n+1; i++) sk[i] = bit_dist(gen);
+    return sample[0] - axs;
+}
+
+
+int32_t LWE_Decrypt(const Torus32 *sample, const int32_t* sk, int32_t n) {
+
+    Torus32 mu = lwePhase(sample, sk, n);
+    return (mu > 0 ? 1 : 0); //we have to do that because of the C binding
+}
+
+Torus32* AND_GSW(Torus32* c1, Torus32* c2, int32_t n, int32_t bit_length, int32_t base_bit) {
+
+
+    Torus32* c = (Torus32*)calloc(n + 1, sizeof(Torus32));
+    for (int32_t i = 0; i < n + 1; i++) {
+        c[i] = c1[i] * c2[i];
+    }
+    return c;
+} 
+
+
+// GSW implementation
+void GSW() {
+    int32_t bit_length = 8;
+    int32_t base_bit = 2;
+    int32_t n = 560;
+    int32_t message = 1;
+
+    cout << "Please wait......., some computations might take some time..." << endl;
+
+    // create a secret key
+    int32_t* sk = (int32_t*)malloc((n + 1) * sizeof(int32_t));
+
+    // // create a matrix A
+    int32_t rows = (n + 1) * bit_length;
+    Torus32** C = (Torus32**)malloc(rows * sizeof(Torus32*));
+    for (int32_t i = 0; i < rows; i++) {
+        C[i] = (Torus32*)calloc(n + 1, sizeof(Torus32));
+    }
+
+    // create a lwe
+    Torus32* lwe = (Torus32*)calloc(n + 1, sizeof(Torus32));
+
+    // create the G^-1(lwe)
+    Torus32* G_inv_lwe = (Torus32*)malloc((n + 1) * bit_length * sizeof(Torus32));
+
+    sk_gen(sk, n);
+    LWE_encrypt(lwe, message, n, sk);
+    G_inverse_of_vector(G_inv_lwe, lwe, n, bit_length, base_bit);
+    GSW_encrypt(C, 1, n, bit_length, base_bit, sk);
+
+    Torus32* result = (Torus32*)calloc(n + 1, sizeof(Torus32));
+    vector_matrix_multiplication(result, G_inv_lwe, C, rows, n + 1);
+
+
+    for (int32_t i = 1; i < n + 1; i++) sk[i] = -sk[i];
+    // cout << vector_multiplication(lwe, sk, n + 1) << endl;    
+    // cout << vector_multiplication(error_vec, G_inv_lwe, (n + 1) * bit_length) << endl;
+    // cout << vector_multiplication(result, sk , n + 1) << endl;
     
+    Torus32* c = (Torus32*)calloc(n + 1, sizeof(Torus32));
+    external_product(c, C, rows, n + 1, lwe, bit_length, base_bit);
+    // cout << vector_multiplication(c, sk, n + 1) << endl;
 
-    // generating an error vector:
-    vector<int32_t> error_vec((n + 1) * bit_length);
-    for (size_t i = 0; i < error_vec.size(); i++) error_vec[i] = bit_dist(gen);
+    cout << "The message is: " << LWE_Decrypt(c, sk, n) << endl;
 
-    // creating the public key, i.e., matrix A = (s*A + e, A):
-    vector<vector<int32_t>> A((n + 1) * bit_length, vector<int32_t>(n + 1, 0));
-
-    for (int i = 0; i < A.size(); i++) 
-        for (int j = 1; j < A[0].size(); j++) 
-            A[i][j] = int32_t_dist(gen);
-
-    for (size_t i = 0; i < A.size(); i++) {
-        for (size_t k = 1; k < A[0].size(); k++) {
-            A[i][0] += sk[k] * A[i][k];
-        }
-        A[i][0] += error_vec[i];
+    free(sk);
+    free(lwe);
+    for (int32_t i = 0; i < rows; i++) {
+        free(C[i]);
     }
-
-    vector<int32_t> lwe(n+1, 0);
-    for (int i = 1; i < n + 1; i++) {
-        lwe[i] = int32_t_dist(gen);
-        lwe[0] += sk[i] * lwe[i];
-    }
-    // lwe[0] += bit_dist(gen);
-    lwe[0] += 8;
-
-    vector<int32_t> G_inv = G_inverse_of_vector(lwe, bit_length);
-    vector<vector<int32_t>> C = encrypt(1, A, n, bit_length);
-    vector<int32_t> result = vector_matrix_multiplication(G_inv, C);
-
-    for (size_t i = 1; i < sk.size(); i++) sk[i] = -sk[i];
-
-    // cout << endl;
-    // for (int i = 0; i < lwe.size(); i++) cout << lwe[i] << " ";
-    // cout << endl;
-    // vector<int32_t> lwe2 = vector_matrix_multiplication(G_inv, create_G(n, bit_length));
-    // for (int i = 0; i < lwe2.size(); i++) cout << lwe2[i] << " ";
-    // cout << endl;
-
-    // bool ok = true;
-    // for (int i = 0; i < lwe.size(); i++) {
-    //     if (lwe[i] != lwe2[i]) {
-    //         ok = false;
-    //         break;
-    //     }
-    // } 
-    // if (ok) cout << "The two vectors are equal!" << endl;
-    // else cout << "The two vectors are not equal!" << endl;
-
-    cout << endl;
-    cout << vector_multiplication(sk, result) << endl;
-
-    cout << vector_multiplication(G_inv, error_vec) << endl;
-    cout << vector_multiplication(sk, lwe) << endl;
-
-    // print_matrix(A);
-
-//     // constructing the random matrix R (as defined in the GSW scheme) with binary entries:
-//     // setting the modulous to 2, for generating a small random numbers:
-//     vector<vector<int32_t>> R(n * bit_length, vector<int32_t>(n * bit_length));
-//     int32_t temp_num;
-//     for (size_t i = 0; i < n * bit_length; i++) {
-//         for (size_t j = 0; j < n * bit_length; j++) {
-//             R[i][j] = dist(gen) % 2;
-//         }
-//     }
-
-    // creating two ciphertexts and testing the add and multiply operations on ciphertexts:
-    // int message1 = 1, message2 = 0;
-    // vector<vector<int32_t>> ciphertext1, ciphertext2;
-    // vector<int32_t> ciphertext3, external_product_result;
-    // vector<vector<int32_t>> addition_result_ct, multiplication_result_ct;
-
-    // ciphertext1 = encrypt(message1, A, n, bit_length);
-    // ciphertext2 = encrypt(message2, A, n, bit_length);
-
-    //cout << "ciphertext1: " << endl;
-    //cout << ciphertext1 << endl;
-
-    //cout << "ciphertext2: " << endl;
-    //cout << ciphertext2 << endl;
-
-    // addition_result_ct = add(ciphertext1, ciphertext2);
-
-
-    // external_product_result = external_product(ciphertext1, ciphertext3);
-
-
-
-//     multiplication_result_ct = multiply(ciphertext1, ciphertext2, n, bit_length);
-
-//     //cout << "\naddition_result: " << endl;
-//     //cout << addition_result << endl;
-
-//     //cout << "multiplication_result: " << endl;
-//     //cout << multiplication_result << endl;
-
-//     //////////////////////////////////////////////////////////////////////////////
-//     // decrypting the result:
-//     int decryption_result1, decryption_result2;
-
-//     decryption_result1 = decrypt(sk, ciphertext1, n, bit_length, p);
-//     decryption_result2 = decrypt(sk, ciphertext2, n, bit_length, p);
-
-//     cout << "\n\nmessage 1 is: " << message1 << endl;
-//     cout << "message 2 is: " << message2 << endl;
-//     cout << "decryption_result1 is: " << decryption_result1 << endl;
-//     cout << "decryption_result2 is: " << decryption_result2 << endl;
-
-// }
+    free(C);
+    free(G_inv_lwe);
+    free(result);
+    // free(d);
+    free(c);
 }
+
+
 
 int main() {
-    
-    cout << "################################################################" << endl;
-    cout << "#------------- Welcome to GSW Implementation! -------------#" << endl;
-    cout << "################################################################" << endl;
+        
+    cout << "#--------------------  GSW Implementation ! -------------------#" << endl;
+    cout << endl;
 
     auto start = clock();
-    myGSW();
+    GSW();
     auto end = clock();
     double time = ((double) end - start)/CLOCKS_PER_SEC;
     cout << "The program took " << time << " s to run." << endl;
 
     cout << endl;
-    cout << "################################################################" << endl;
     cout << "#----------------------- End of Program -----------------------#" << endl;
-    cout << "################################################################" << endl;
 
     return 0;
 }
