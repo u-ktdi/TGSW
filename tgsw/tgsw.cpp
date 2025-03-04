@@ -7,6 +7,11 @@ GSW scheme: https://eprint.iacr.org/2013/340.pdf
 
 #include "tgsw.hpp"
 
+// #include <iostream>
+// #include <random>
+// #include <cstdint>
+// #include <vector>
+
 const double stdev = 3.05e-5;
 
 // random number generator
@@ -15,7 +20,6 @@ std::mt19937 gen(rd());
 std::uniform_int_distribution<int32_t> bit_dist(0, 1);
 std::uniform_int_distribution<int32_t> int32_t_dist(std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max());
 std::normal_distribution<double> error_distribution(0., stdev);
-
 
 
 Torus32 modSwitchToTorus32(int32_t mu, int32_t Msize){
@@ -91,18 +95,19 @@ void G_inverse_of_scalar(Torus32* result, int32_t num, int32_t bit_length, int32
 }
 
 
-// create a matrix G^-1(vector)
-void G_inverse_of_vector(Torus32* result, Torus32* ciphertext, int32_t n, int32_t bit_length, int32_t base_bit) {
+void G_inverse_of_vector(Torus32* result , Torus32* ciphertext, int32_t n, int32_t bit_length, int32_t base_bit) {
     int32_t index = 0;
 
+    Torus32* num_bitdecomposed = (Torus32*)malloc(bit_length * sizeof(Torus32));
+
     for (int32_t j = 0; j < n + 1; j++) {
-        Torus32* num_bitdecomposed = (Torus32*)malloc(bit_length * sizeof(Torus32));
+        
         G_inverse_of_scalar(num_bitdecomposed, ciphertext[j], bit_length, base_bit);
-        for (int32_t k = 0; k < bit_length; k++) {
-            result[index++] = num_bitdecomposed[k];
-        }
-        free(num_bitdecomposed);
+        memcpy(&result[index], num_bitdecomposed, bit_length * sizeof(Torus32));
+        index += bit_length;
     }
+
+    free(num_bitdecomposed);
 
     return;
 }
@@ -110,7 +115,6 @@ void G_inverse_of_vector(Torus32* result, Torus32* ciphertext, int32_t n, int32_
 
 // G * G^-1 (calloc)
 void G_Ginv_multiplication(Torus32* result, Torus32** G, Torus32* G_inv, int32_t n, int32_t bit_length) {
-    int32_t cols = n + 1;
 
     int32_t j = 0, rows = (n + 1) * bit_length;
     for (int32_t i = 0; i < rows; i++) {
@@ -123,20 +127,21 @@ void G_Ginv_multiplication(Torus32* result, Torus32** G, Torus32* G_inv, int32_t
 
 
 // internal product
-int32_t vector_multiplication(Torus32* v1, Torus32* v2, int32_t size) {
+int32_t vector_multiplication(Torus32* v1, Torus32* v2, int32_t vec_size) {
     int32_t result = 0;
 
-    for (int32_t i = 0; i < size; i++) {
+    for (int32_t i = 0; i < vec_size; i++) {
         result += v1[i] * v2[i];
     }
 
     return result;
 }
 
+
 // matrix vector multiplication (need to prepare the vector with calloc)
-void matrix_vector_multiplication(Torus32* result, Torus32** mat, Torus32* vec, int32_t rows, int32_t cols) {
-    for (int32_t i = 0; i < rows; i++) {
-        for (int32_t j = 0; j < cols; j++) {
+void matrix_vector_multiplication(Torus32* result, Torus32** mat, Torus32* vec, int32_t mat_rows, int32_t mat_cols) {
+    for (int32_t i = 0; i < mat_rows; i++) {
+        for (int32_t j = 0; j < mat_cols; j++) {
             result[i] += mat[i][j] * vec[j];
         }
     }
@@ -159,7 +164,6 @@ void vector_matrix_multiplication(Torus32* result, Torus32* vec, Torus32** mat, 
 
 // create matrix G
 void create_G(Torus32** G, int32_t n, int32_t bit_length, int32_t base_bit) {
-    int32_t rows = (n + 1) * bit_length;
     int32_t cols = n + 1;
 
     for (int32_t i = 0; i < cols; i++) {
@@ -167,13 +171,44 @@ void create_G(Torus32** G, int32_t n, int32_t bit_length, int32_t base_bit) {
             G[i * bit_length + j][i] = 1 << (32 - (j + 1) * base_bit);
         }
     }
+    
+    for (int32_t i = 0; i < cols; i++) {
+        for (int32_t j = 0; j < bit_length; j++) {
+            G[i * bit_length + j][i] = 1 << (32 - (j + 1) * base_bit);
+        }
+    }
+    
+    return;
+}
 
+
+// Add computation by tgsw (add two matrices)
+void add(Torus32** C1, Torus32** C2, int32_t rows, int32_t cols) {
+    for (int32_t i = 0; i < rows; i++) {
+        for (int32_t j = 0; j < cols; j++) {
+            C1[i][j] += C2[i][j];
+        }
+    }
+    return;
+}
+
+
+// implement the external product
+void external_product(Torus32* result, Torus32** C, Torus32* lwe, int32_t n, int32_t bit_length, int32_t base_bit) {
+    const int32_t C_rows = (n + 1) * bit_length;
+    const int32_t C_cols = n + 1;
+
+    Torus32* G_inv_lwe = (Torus32*)malloc(C_rows * sizeof(Torus32));
+    G_inverse_of_vector(G_inv_lwe, lwe, n, bit_length, base_bit);
+    vector_matrix_multiplication(result, G_inv_lwe, C, C_rows, C_cols);
+
+    free(G_inv_lwe);
     return;
 }
 
 
 // GSW encryption
-void GSW_encrypt(Torus32** C, int message, int32_t n, int32_t bit_length, int32_t Bksbit, int32_t* sk) {
+void GSW_encrypt(Torus32** C, int32_t message, int32_t n, int32_t bit_length, int32_t Bksbit, int32_t* sk) {
 
     int32_t rows = (n + 1) * bit_length;
     int32_t cols = n + 1;
@@ -197,9 +232,7 @@ void GSW_encrypt(Torus32** C, int message, int32_t n, int32_t bit_length, int32_
         C[i][0] += error_vec[i];
     }
 
-    int32_t m = int32_t(message);
-    if (m == 0) return;
-
+    if (message == 0) return;
 
     // create the matrix G
     int32_t** G = (int32_t**)malloc(rows * sizeof(int32_t*));
@@ -219,28 +252,6 @@ void GSW_encrypt(Torus32** C, int message, int32_t n, int32_t bit_length, int32_
     free(G);
     free(error_vec);
 
-    return;
-}
-
-
-// Add computation by tgsw (add two matrices)
-void add(Torus32** C1, Torus32** C2, int32_t rows, int32_t cols) {
-    for (int32_t i = 0; i < rows; i++) {
-        for (int32_t j = 0; j < cols; j++) {
-            C1[i][j] += C2[i][j];
-        }
-    }
-    return;
-}
-
-
-// implement the external product
-void external_product(Torus32* result, Torus32** C, int32_t C_rows, int32_t C_cols, Torus32* lwe, int32_t bit_length, int32_t base_bit) {
-    Torus32* G_inv_lwe = (Torus32*)malloc(C_rows * sizeof(Torus32));
-    G_inverse_of_vector(G_inv_lwe, lwe, C_cols - 1, bit_length, base_bit);
-    vector_matrix_multiplication(result, G_inv_lwe, C, C_rows, C_cols);
-
-    free(G_inv_lwe);
     return;
 }
 
@@ -268,81 +279,4 @@ Torus32* AND_GSW(Torus32* c1, Torus32* c2, int32_t n, int32_t bit_length, int32_
         c[i] = c1[i] * c2[i];
     }
     return c;
-} 
-
-
-// GSW implementation
-void GSW() {
-    int32_t bit_length = 8;
-    int32_t base_bit = 2;
-    int32_t n = 560;
-    int32_t message = 1;
-
-    std::cout << "Please wait......., some computations might take some time..." << std::endl;
-
-    // create a secret key
-    int32_t* sk = (int32_t*)malloc((n + 1) * sizeof(int32_t));
-
-    // // create a matrix A
-    int32_t rows = (n + 1) * bit_length;
-    Torus32** C = (Torus32**)malloc(rows * sizeof(Torus32*));
-    for (int32_t i = 0; i < rows; i++) {
-        C[i] = (Torus32*)calloc(n + 1, sizeof(Torus32));
-    }
-
-    // create a lwe
-    Torus32* lwe = (Torus32*)calloc(n + 1, sizeof(Torus32));
-
-    // create the G^-1(lwe)
-    Torus32* G_inv_lwe = (Torus32*)malloc((n + 1) * bit_length * sizeof(Torus32));
-
-    sk_gen(sk, n);
-    LWE_encrypt(lwe, message, n, sk);
-    G_inverse_of_vector(G_inv_lwe, lwe, n, bit_length, base_bit);
-    GSW_encrypt(C, 1, n, bit_length, base_bit, sk);
-
-    Torus32* result = (Torus32*)calloc(n + 1, sizeof(Torus32));
-    vector_matrix_multiplication(result, G_inv_lwe, C, rows, n + 1);
-
-
-    for (int32_t i = 1; i < n + 1; i++) sk[i] = -sk[i];
-    // cout << vector_multiplication(lwe, sk, n + 1) << endl;    
-    // cout << vector_multiplication(error_vec, G_inv_lwe, (n + 1) * bit_length) << endl;
-    // cout << vector_multiplication(result, sk , n + 1) << endl;
-    
-    Torus32* c = (Torus32*)calloc(n + 1, sizeof(Torus32));
-    external_product(c, C, rows, n + 1, lwe, bit_length, base_bit);
-    // cout << vector_multiplication(c, sk, n + 1) << endl;
-
-    std::cout << "The message is: " << LWE_Decrypt(c, sk, n) << std::endl;
-
-    free(sk);
-    free(lwe);
-    for (int32_t i = 0; i < rows; i++) {
-        free(C[i]);
-    }
-    free(C);
-    free(G_inv_lwe);
-    free(result);
-    // free(d);
-    free(c);
 }
-
-
-
-// int main() {
-        
-//     cout << "#--------------------  GSW Implementation ! -------------------#" << endl;
-//     cout << endl;
-
-//     auto start = clock();
-//     GSW();
-//     auto end = clock();
-//     double time = ((double) end - start)/CLOCKS_PER_SEC;
-//     cout << "The program took " << time << " s to run." << endl;
-
-//     cout << endl;
-//     cout << "#----------------------- End of Program -----------------------#" << endl;
-
-//     return 0;
-// }
