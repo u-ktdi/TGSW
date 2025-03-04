@@ -5,23 +5,16 @@ Articles and references:
 GSW scheme: https://eprint.iacr.org/2013/340.pdf
 */
 
-#include <iostream>
-#include <random>
-#include <cstdint>
-#include <chrono>
-#include <cstdlib>
-
-using namespace std;
-using Torus32 = int32_t;
+#include "tgsw.hpp"
 
 const double stdev = 3.05e-5;
 
 // random number generator
-random_device rd;
-mt19937 gen(rd());
-uniform_int_distribution<int32_t> bit_dist(0, 1);
-uniform_int_distribution<int32_t> int32_t_dist(numeric_limits<int32_t>::min(), numeric_limits<int32_t>::max());
-normal_distribution<double> error_distribution(0., stdev);
+std::random_device rd;
+std::mt19937 gen(rd());
+std::uniform_int_distribution<int32_t> bit_dist(0, 1);
+std::uniform_int_distribution<int32_t> int32_t_dist(std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max());
+std::normal_distribution<double> error_distribution(0., stdev);
 
 
 
@@ -76,9 +69,9 @@ void sk_gen(int32_t* sk, int32_t n) {
 void print_matrix(Torus32** matrix, int32_t rows, int32_t cols) {
     for (int32_t i = 0; i < rows; i++) {
         for (int32_t j = 0; j < cols; j++) {
-            cout << matrix[i][j] << " ";
+            std::cout << matrix[i][j] << " ";
         }
-        cout << endl;
+        std::cout << std::endl;
     }
 }
 
@@ -285,7 +278,7 @@ void GSW() {
     int32_t n = 560;
     int32_t message = 1;
 
-    cout << "Please wait......., some computations might take some time..." << endl;
+    std::cout << "Please wait......., some computations might take some time..." << std::endl;
 
     // create a secret key
     int32_t* sk = (int32_t*)malloc((n + 1) * sizeof(int32_t));
@@ -321,7 +314,7 @@ void GSW() {
     external_product(c, C, rows, n + 1, lwe, bit_length, base_bit);
     // cout << vector_multiplication(c, sk, n + 1) << endl;
 
-    cout << "The message is: " << LWE_Decrypt(c, sk, n) << endl;
+    std::cout << "The message is: " << LWE_Decrypt(c, sk, n) << std::endl;
 
     free(sk);
     free(lwe);
@@ -337,19 +330,19 @@ void GSW() {
 
 
 
-int main() {
+// int main() {
         
-    cout << "#--------------------  GSW Implementation ! -------------------#" << endl;
-    cout << endl;
+//     cout << "#--------------------  GSW Implementation ! -------------------#" << endl;
+//     cout << endl;
 
-    auto start = clock();
-    GSW();
-    auto end = clock();
-    double time = ((double) end - start)/CLOCKS_PER_SEC;
-    cout << "The program took " << time << " s to run." << endl;
+//     auto start = clock();
+//     GSW();
+//     auto end = clock();
+//     double time = ((double) end - start)/CLOCKS_PER_SEC;
+//     cout << "The program took " << time << " s to run." << endl;
 
-    cout << endl;
-    cout << "#----------------------- End of Program -----------------------#" << endl;
+//     cout << endl;
+//     cout << "#----------------------- End of Program -----------------------#" << endl;
 
-    return 0;
-}
+//     return 0;
+// }

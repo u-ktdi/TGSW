@@ -1,0 +1,12 @@
+# 
+build
+.vscode
+
+# bin file
+*.o
+*.obj
+*.so
+*.a
+*.lib
+*.dll
+*.exe
