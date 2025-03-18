@@ -7,10 +7,6 @@ GSW scheme: https://eprint.iacr.org/2013/340.pdf
 
 #include "tgsw.hpp"
 
-// #include <iostream>
-// #include <random>
-// #include <cstdint>
-// #include <vector>
 
 const double stdev = 3.05e-5;
 
@@ -226,13 +222,16 @@ void GSW_encrypt(Torus32** C, int32_t message, int32_t n, int32_t bit_length, in
 
     // creating the key, i.e., matrix A = (s*A + e, A):
     for (int32_t i = 0; i < rows; i++) {
+        C[i][0] = error_vec[i];
         for (int32_t k = 1; k < n + 1; k++) {
             C[i][0] += sk[k] * C[i][k];
         }
-        C[i][0] += error_vec[i];
     }
 
-    if (message == 0) return;
+    if (message == 0) {
+        free(error_vec);
+        return;
+    }
 
     // create the matrix G
     int32_t** G = (int32_t**)malloc(rows * sizeof(int32_t*));
@@ -246,12 +245,13 @@ void GSW_encrypt(Torus32** C, int32_t message, int32_t n, int32_t bit_length, in
         for (int32_t j = 0; j < cols; j++) {
             C[i][j] += G[i][j];
         }
-        free(G[i]);
     }
 
+    for (int32_t i = 0; i < rows; i++) {
+        free(G[i]);
+    }
     free(G);
     free(error_vec);
-
     return;
 }
 

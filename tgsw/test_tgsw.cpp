@@ -16,7 +16,7 @@ int main() {
     int32_t cnt = 0;
     for (int32_t i = 0; i < trial; i++) {
         // create a message
-        int32_t lwe_message = 0;
+        int32_t lwe_message = bit_dist(gen);
         int32_t gsw_message = 1;
 
         // create a secret key
